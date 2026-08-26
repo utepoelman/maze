@@ -28,6 +28,14 @@
     flex-direction: column;
     align-items: center;
   }
+  body:fullscreen, body:-webkit-full-screen {
+    margin: 0;
+    padding: 20px;
+    box-sizing: border-box;
+    width: 100vw;
+    height: 100vh;
+    overflow: auto;
+  }
   #controls {
     display: flex;
     flex-wrap: wrap;
@@ -105,9 +113,14 @@
 
 <div id="controls">
   <button id="btn-start-game">Start Game (Space)</button>
+  <button id="btn-fullscreen">Full Screen</button>
   <button id="btn-how-to">How to Play</button>
   <button id="btn-new">New Maze</button>
   <button id="btn-restart">Replay Maze</button>
+  <select id="size-select">
+    <option value="6">Size: Standard</option>
+    <option value="9">Size: Large (+3 Rows)</option>
+  </select>
   <select id="theme-select">
     <option value="light">Black on White</option>
     <option value="dark">White on Black</option>
@@ -139,8 +152,8 @@
 </div>
 
 <script>
-const N = 6;
-const S = 36;
+let N = 6;
+const S = 32;
 const H = S * Math.sqrt(3) / 2;
 
 let cells = [];
@@ -252,27 +265,31 @@ function buildHexagonalTriGrid() {
   });
 }
 
-function carveMaze() {
-  const internalEdges = edges.filter(e => !e.isBoundary);
+// Meandering Path Generator (Depth-First Search)
+function carveMazeDFS() {
   wallFlags = new Array(edges.length).fill(true);
+  const visited = new Array(cells.length).fill(false);
+  const stack = [0];
+  visited[0] = true;
 
-  const parent = Array.from({ length: cells.length }, (_, i) => i);
-  function find(i) { return parent[i] === i ? i : (parent[i] = find(parent[i])); }
-  function union(i, j) {
-    const rA = find(i), rB = find(j);
-    if (rA !== rB) { parent[rA] = rB; return true; }
-    return false;
-  }
+  while (stack.length > 0) {
+    const current = stack[stack.length - 1];
+    const unvisitedNeighbors = cells[current].neighbors.filter(nId => !visited[nId]);
 
-  const shuffled = [...internalEdges];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(prng() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
+    if (unvisitedNeighbors.length > 0) {
+      const nextId = unvisitedNeighbors[Math.floor(prng() * unvisitedNeighbors.length)];
+      
+      const edge = edges.find(e => !e.isBoundary && 
+        ((e.u === current && e.v === nextId) || (e.u === nextId && e.v === current)));
+      
+      if (edge) {
+        wallFlags[edge.id] = false;
+      }
 
-  for (let edge of shuffled) {
-    if (union(edge.u, edge.v)) {
-      wallFlags[edge.id] = false;
+      visited[nextId] = true;
+      stack.push(nextId);
+    } else {
+      stack.pop();
     }
   }
 }
@@ -281,8 +298,10 @@ function prepareGame(seed = null) {
   currentSeed = (seed === null) ? Math.floor(Math.random() * 10000000) : seed;
   prng = mulberry32(currentSeed);
 
+  N = parseInt(document.getElementById('size-select').value, 10);
+
   buildHexagonalTriGrid();
-  carveMaze();
+  carveMazeDFS();
 
   let minX = Infinity, maxX = -Infinity;
   cells.forEach(c => {
@@ -421,21 +440,23 @@ function draw() {
 function moveToTarget(targetId) {
   if (targetId === -1 || targetId === currentCellIndex) return;
 
+  // 1. Must be adjacent
+  if (!cells[currentCellIndex].neighbors.includes(targetId)) return;
+
+  // 2. Must not be separated by a wall
+  const edge = edges.find(e => !e.isBoundary && ((e.u === currentCellIndex && e.v === targetId) || (e.u === targetId && e.v === currentCellIndex)));
+  if (edge && wallFlags[edge.id]) return;
+
+  // 3. Process movement or path backtracking after wall verification
   const pathIdx = visitedPath.indexOf(targetId);
   if (pathIdx !== -1) {
     currentCellIndex = targetId;
     visitedPath = visitedPath.slice(0, pathIdx + 1);
-    draw();
-    return;
+  } else {
+    currentCellIndex = targetId;
+    visitedPath.push(currentCellIndex);
   }
 
-  if (!cells[currentCellIndex].neighbors.includes(targetId)) return;
-
-  const edge = edges.find(e => !e.isBoundary && ((e.u === currentCellIndex && e.v === targetId) || (e.u === targetId && e.v === currentCellIndex)));
-  if (edge && wallFlags[edge.id]) return;
-
-  currentCellIndex = targetId;
-  visitedPath.push(currentCellIndex);
   draw();
 
   if (currentCellIndex === endCellIndex) {
@@ -502,9 +523,6 @@ window.addEventListener('keydown', (e) => {
     return edges.find(e => !e.isBoundary && ((e.u === idA && e.v === idB) || (e.u === idB && e.v === idA)));
   }
 
-  // Swapped Up/Down orientation logic to match visual Y-coordinates:
-  // Upright ▲ moves UP across its top point (needs ArrowUp if neighbor is inverted above it)
-  // Inverted ▼ moves DOWN across its base (needs ArrowDown if neighbor is upright below it)
   if (e.key === 'ArrowUp' && currentCell.isUpright) {
     currentCell.neighbors.forEach(nId => {
       const edge = getSharedEdge(currentCellIndex, nId);
@@ -552,9 +570,30 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// Fullscreen API Logic
+const fsBtn = document.getElementById('btn-fullscreen');
+fsBtn.addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(err => {
+      alert(`Error trying to enable full-screen mode: ${err.message}`);
+    });
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+document.addEventListener('fullscreenchange', () => {
+  if (document.fullscreenElement) {
+    fsBtn.textContent = "Exit Full Screen";
+  } else {
+    fsBtn.textContent = "Full Screen";
+  }
+});
+
 document.getElementById('btn-start-game').addEventListener('click', startGame);
 document.getElementById('btn-new').addEventListener('click', () => prepareGame());
 document.getElementById('btn-restart').addEventListener('click', () => prepareGame(currentSeed));
+document.getElementById('size-select').addEventListener('change', () => prepareGame());
 document.getElementById('btn-how-to').addEventListener('click', () => document.getElementById('modal-overlay').classList.remove('hidden'));
 document.getElementById('btn-close-modal').addEventListener('click', () => document.getElementById('modal-overlay').classList.add('hidden'));
 
