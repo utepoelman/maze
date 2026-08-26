@@ -52,7 +52,6 @@
   body.dark-mode #btn-start-game {
     border-color: #ffffff;
   }
-  /* Prominent Large Timer Styling */
   #timer-display {
     font-size: 32px;
     font-weight: bold;
@@ -75,6 +74,7 @@
   canvas {
     display: block;
     cursor: pointer;
+    outline: none;
   }
   #message {
     font-size: 18px;
@@ -104,7 +104,7 @@
 <body>
 
 <div id="controls">
-  <button id="btn-start-game">Start Game</button>
+  <button id="btn-start-game">Start Game (Space)</button>
   <button id="btn-how-to">How to Play</button>
   <button id="btn-new">New Maze</button>
   <button id="btn-restart">Replay Maze</button>
@@ -118,7 +118,7 @@
 <div id="timer-display">00:00</div>
 
 <div id="canvas-container">
-  <canvas id="mazeCanvas"></canvas>
+  <canvas id="mazeCanvas" tabindex="0"></canvas>
 </div>
 
 <div id="message"></div>
@@ -128,10 +128,11 @@
     <h3 style="margin-top:0;">How to Play</h3>
     <p>Find a path from the blue start triangle to the red goal triangle.</p>
     <ul>
-      <li>Click <strong>Start Game</strong> to reveal the maze walls and start the timer.</li>
-      <li>Click on an <strong>adjacent triangle</strong> without a wall barrier to move into it.</li>
+      <li>Press <strong>Spacebar</strong> or click <strong>Start Game</strong> to begin.</li>
+      <li>Click on an <strong>adjacent triangle</strong> or use <strong>Arrow Keys</strong> to move.</li>
+      <li><strong>Upright Triangles (▲):</strong> Left, Right, Up.</li>
+      <li><strong>Inverted Triangles (▼):</strong> Left, Right, Down.</li>
       <li>Your valid path lights up in blue as you move.</li>
-      <li>Click any earlier blue triangle on your path to backtrack.</li>
     </ul>
     <button id="btn-close-modal">Got It</button>
   </div>
@@ -197,22 +198,24 @@ function buildHexagonalTriGrid() {
       const bx = (c + r / 2) * S;
       const by = r * H;
 
+      // Upright Triangle
       const cxUp = bx + S / 2;
       const cyUp = by + H / 3;
       if (isPointInHexagon(cxUp, cyUp, maxR)) {
         const p1 = getVertex(bx, by);
         const p2 = getVertex(bx + S, by);
         const p3 = getVertex(bx + S / 2, by + H);
-        cells.push({ id: cells.length, pts: [p1, p2, p3], neighbors: [] });
+        cells.push({ id: cells.length, pts: [p1, p2, p3], isUpright: true, neighbors: [] });
       }
 
+      // Inverted Triangle
       const cxDn = bx + S;
       const cyDn = by + (2 * H) / 3;
       if (isPointInHexagon(cxDn, cyDn, maxR)) {
         const p1 = getVertex(bx + S, by);
         const p2 = getVertex(bx + S * 1.5, by + H);
         const p3 = getVertex(bx + S / 2, by + H);
-        cells.push({ id: cells.length, pts: [p1, p2, p3], neighbors: [] });
+        cells.push({ id: cells.length, pts: [p1, p2, p3], isUpright: false, neighbors: [] });
       }
     }
   }
@@ -321,7 +324,7 @@ function prepareGame(seed = null) {
 
   document.getElementById('btn-start-game').disabled = false;
   document.getElementById('timer-display').textContent = "00:00";
-  document.getElementById('message').textContent = "Click 'Start Game' to reveal walls and start timer.";
+  document.getElementById('message').textContent = "Press Space or click 'Start Game' to reveal walls.";
 
   draw();
 }
@@ -332,6 +335,7 @@ function startGame() {
   gameActive = true;
   document.getElementById('btn-start-game').disabled = true;
   document.getElementById('message').textContent = "";
+  canvas.focus();
   startTimer();
   draw();
 }
@@ -361,10 +365,23 @@ function draw() {
 
   const isDark = document.body.classList.contains('dark-mode');
   const wallColor = isDark ? '#ffffff' : '#000000';
+  const gridColor = isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.15)';
   const pathColor = '#3399ff';
-  const endColor = '#ff3333'; // Vibrant Red Finish Triangle
+  const endColor = '#ff3333';
 
-  // 1. Visited path (Start & current path)
+  // 1. Boundary Grid Lines
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  edges.forEach(e => {
+    if (!e.isBoundary) {
+      ctx.beginPath();
+      ctx.moveTo(e.v1.x, e.v1.y);
+      ctx.lineTo(e.v2.x, e.v2.y);
+      ctx.stroke();
+    }
+  });
+
+  // 2. Visited path
   visitedPath.forEach(id => {
     const c = cells[id];
     ctx.fillStyle = pathColor;
@@ -376,7 +393,7 @@ function draw() {
     ctx.fill();
   });
 
-  // 2. Goal triangle
+  // 3. Goal triangle
   const endC = cells[endCellIndex];
   ctx.fillStyle = endColor;
   ctx.beginPath();
@@ -386,7 +403,7 @@ function draw() {
   ctx.closePath();
   ctx.fill();
 
-  // 3. Walls
+  // 4. Solid Maze Barriers
   ctx.strokeStyle = wallColor;
   ctx.lineWidth = 3;
   ctx.lineCap = 'round';
@@ -399,6 +416,34 @@ function draw() {
       ctx.stroke();
     }
   });
+}
+
+function moveToTarget(targetId) {
+  if (targetId === -1 || targetId === currentCellIndex) return;
+
+  const pathIdx = visitedPath.indexOf(targetId);
+  if (pathIdx !== -1) {
+    currentCellIndex = targetId;
+    visitedPath = visitedPath.slice(0, pathIdx + 1);
+    draw();
+    return;
+  }
+
+  if (!cells[currentCellIndex].neighbors.includes(targetId)) return;
+
+  const edge = edges.find(e => !e.isBoundary && ((e.u === currentCellIndex && e.v === targetId) || (e.u === targetId && e.v === currentCellIndex)));
+  if (edge && wallFlags[edge.id]) return;
+
+  currentCellIndex = targetId;
+  visitedPath.push(currentCellIndex);
+  draw();
+
+  if (currentCellIndex === endCellIndex) {
+    gameActive = false;
+    stopTimer();
+    const finalSecs = (elapsedTime / 1000).toFixed(2);
+    document.getElementById('message').textContent = `Maze Completed! Total Time: ${finalSecs} seconds`;
+  }
 }
 
 function pointInTriangle(px, py, pts) {
@@ -427,30 +472,83 @@ canvas.addEventListener('click', (e) => {
     }
   }
 
-  if (targetId === -1 || targetId === currentCellIndex) return;
+  moveToTarget(targetId);
+});
 
-  const pathIdx = visitedPath.indexOf(targetId);
-  if (pathIdx !== -1) {
-    currentCellIndex = targetId;
-    visitedPath = visitedPath.slice(0, pathIdx + 1);
-    draw();
+// Structural Shared-Edge Keyboard Navigation + Spacebar
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (!gameStarted) {
+      startGame();
+    }
     return;
   }
 
-  if (!cells[currentCellIndex].neighbors.includes(targetId)) return;
+  if (!gameActive || !gameStarted) return;
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
 
-  const edge = edges.find(e => !e.isBoundary && ((e.u === currentCellIndex && e.v === targetId) || (e.u === targetId && e.v === currentCellIndex)));
-  if (edge && wallFlags[edge.id]) return;
+  e.preventDefault();
 
-  currentCellIndex = targetId;
-  visitedPath.push(currentCellIndex);
-  draw();
+  const currentCell = cells[currentCellIndex];
+  const curCenter = {
+    x: (currentCell.pts[0].x + currentCell.pts[1].x + currentCell.pts[2].x) / 3,
+    y: (currentCell.pts[0].y + currentCell.pts[1].y + currentCell.pts[2].y) / 3
+  };
 
-  if (currentCellIndex === endCellIndex) {
-    gameActive = false;
-    stopTimer();
-    const finalSecs = (elapsedTime / 1000).toFixed(2);
-    document.getElementById('message').textContent = `Maze Completed! Total Time: ${finalSecs} seconds`;
+  let bestNeighbor = -1;
+
+  function getSharedEdge(idA, idB) {
+    return edges.find(e => !e.isBoundary && ((e.u === idA && e.v === idB) || (e.u === idB && e.v === idA)));
+  }
+
+  // Swapped Up/Down orientation logic to match visual Y-coordinates:
+  // Upright ▲ moves UP across its top point (needs ArrowUp if neighbor is inverted above it)
+  // Inverted ▼ moves DOWN across its base (needs ArrowDown if neighbor is upright below it)
+  if (e.key === 'ArrowUp' && currentCell.isUpright) {
+    currentCell.neighbors.forEach(nId => {
+      const edge = getSharedEdge(currentCellIndex, nId);
+      if (edge && Math.abs(edge.v1.y - edge.v2.y) < 1.0) {
+        bestNeighbor = nId;
+      }
+    });
+  } else if (e.key === 'ArrowDown' && !currentCell.isUpright) {
+    currentCell.neighbors.forEach(nId => {
+      const edge = getSharedEdge(currentCellIndex, nId);
+      if (edge && Math.abs(edge.v1.y - edge.v2.y) < 1.0) {
+        bestNeighbor = nId;
+      }
+    });
+  } else if (e.key === 'ArrowLeft') {
+    let minX = Infinity;
+    currentCell.neighbors.forEach(nId => {
+      const edge = getSharedEdge(currentCellIndex, nId);
+      if (edge && Math.abs(edge.v1.y - edge.v2.y) >= 1.0) {
+        const nCell = cells[nId];
+        const nCx = (nCell.pts[0].x + nCell.pts[1].x + nCell.pts[2].x) / 3;
+        if (nCx < curCenter.x && nCx < minX) {
+          minX = nCx;
+          bestNeighbor = nId;
+        }
+      }
+    });
+  } else if (e.key === 'ArrowRight') {
+    let maxX = -Infinity;
+    currentCell.neighbors.forEach(nId => {
+      const edge = getSharedEdge(currentCellIndex, nId);
+      if (edge && Math.abs(edge.v1.y - edge.v2.y) >= 1.0) {
+        const nCell = cells[nId];
+        const nCx = (nCell.pts[0].x + nCell.pts[1].x + nCell.pts[2].x) / 3;
+        if (nCx > curCenter.x && nCx > maxX) {
+          maxX = nCx;
+          bestNeighbor = nId;
+        }
+      }
+    });
+  }
+
+  if (bestNeighbor !== -1) {
+    moveToTarget(bestNeighbor);
   }
 });
 
