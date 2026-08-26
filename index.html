@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hexagonal Triangular Maze</title>
+<style>
+  :root {
+    --bg-color: #ffffff;
+    --text-color: #000000;
+    --button-bg: #eeeeee;
+    --button-border: #999999;
+    --timer-bg: #f5f5f5;
+  }
+  body.dark-mode {
+    --bg-color: #000000;
+    --text-color: #ffffff;
+    --button-bg: #222222;
+    --button-border: #666666;
+    --timer-bg: #111111;
+  }
+  body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: monospace, sans-serif;
+    margin: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 10px;
+  }
+  button, select, label {
+    background-color: var(--button-bg);
+    color: var(--text-color);
+    border: 1px solid var(--button-border);
+    padding: 6px 12px;
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #btn-start-game {
+    font-weight: bold;
+    border-color: #000000;
+  }
+  body.dark-mode #btn-start-game {
+    border-color: #ffffff;
+  }
+  /* Prominent Large Timer Styling */
+  #timer-display {
+    font-size: 32px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    min-width: 140px;
+    text-align: center;
+    margin: 10px 0 5px 0;
+    padding: 6px 20px;
+    border: 2px solid var(--text-color);
+    background-color: var(--timer-bg);
+    border-radius: 4px;
+  }
+  .hidden { display: none !important; }
+  #canvas-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 5px;
+  }
+  canvas {
+    display: block;
+    cursor: pointer;
+  }
+  #message {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 15px;
+    min-height: 24px;
+  }
+  #modal-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal-content {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    border: 2px solid var(--text-color);
+    padding: 20px 30px;
+    max-width: 450px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <button id="btn-start-game">Start Game</button>
+  <button id="btn-how-to">How to Play</button>
+  <button id="btn-new">New Maze</button>
+  <button id="btn-restart">Replay Maze</button>
+  <select id="theme-select">
+    <option value="light">Black on White</option>
+    <option value="dark">White on Black</option>
+  </select>
+  <label><input type="checkbox" id="timer-toggle" checked> Show Timer</label>
+</div>
+
+<div id="timer-display">00:00</div>
+
+<div id="canvas-container">
+  <canvas id="mazeCanvas"></canvas>
+</div>
+
+<div id="message"></div>
+
+<div id="modal-overlay" class="hidden">
+  <div class="modal-content">
+    <h3 style="margin-top:0;">How to Play</h3>
+    <p>Find a path from the blue start triangle to the red goal triangle.</p>
+    <ul>
+      <li>Click <strong>Start Game</strong> to reveal the maze walls and start the timer.</li>
+      <li>Click on an <strong>adjacent triangle</strong> without a wall barrier to move into it.</li>
+      <li>Your valid path lights up in blue as you move.</li>
+      <li>Click any earlier blue triangle on your path to backtrack.</li>
+    </ul>
+    <button id="btn-close-modal">Got It</button>
+  </div>
+</div>
+
+<script>
+const N = 6;
+const S = 36;
+const H = S * Math.sqrt(3) / 2;
+
+let cells = [];
+let edges = [];
+let wallFlags = [];
+
+let currentCellIndex = 0;
+let endCellIndex = 0;
+let visitedPath = [];
+
+let gameStarted = false;
+let gameActive = false;
+let startTime = 0;
+let timerInterval = null;
+let elapsedTime = 0;
+let currentSeed = 0;
+
+const canvas = document.getElementById('mazeCanvas');
+const ctx = canvas.getContext('2d');
+
+function mulberry32(a) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 8, t | 7);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+let prng = Math.random;
+
+const vertexMap = new Map();
+function getVertex(x, y) {
+  const key = `${Math.round(x * 100)},${Math.round(y * 100)}`;
+  if (!vertexMap.has(key)) {
+    vertexMap.set(key, { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 });
+  }
+  return vertexMap.get(key);
+}
+
+function isPointInHexagon(x, y, R) {
+  const absX = Math.abs(x);
+  const absY = Math.abs(y);
+  return (absY <= R) && (absX * Math.sqrt(3) + absY <= 2 * R);
+}
+
+function buildHexagonalTriGrid() {
+  cells = [];
+  edges = [];
+  vertexMap.clear();
+
+  const maxR = N * H - 0.1;
+
+  for (let r = -N * 2; r <= N * 2; r++) {
+    for (let c = -N * 2; c <= N * 2; c++) {
+      const bx = (c + r / 2) * S;
+      const by = r * H;
+
+      const cxUp = bx + S / 2;
+      const cyUp = by + H / 3;
+      if (isPointInHexagon(cxUp, cyUp, maxR)) {
+        const p1 = getVertex(bx, by);
+        const p2 = getVertex(bx + S, by);
+        const p3 = getVertex(bx + S / 2, by + H);
+        cells.push({ id: cells.length, pts: [p1, p2, p3], neighbors: [] });
+      }
+
+      const cxDn = bx + S;
+      const cyDn = by + (2 * H) / 3;
+      if (isPointInHexagon(cxDn, cyDn, maxR)) {
+        const p1 = getVertex(bx + S, by);
+        const p2 = getVertex(bx + S * 1.5, by + H);
+        const p3 = getVertex(bx + S / 2, by + H);
+        cells.push({ id: cells.length, pts: [p1, p2, p3], neighbors: [] });
+      }
+    }
+  }
+
+  const edgeMap = new Map();
+  function edgeKey(v1, v2) {
+    const k1 = `${v1.x},${v1.y}`;
+    const k2 = `${v2.x},${v2.y}`;
+    return k1 < k2 ? `${k1}_${k2}` : `${k2}_${k1}`;
+  }
+
+  cells.forEach(c => {
+    const p = c.pts;
+    const segs = [[p[0], p[1]], [p[1], p[2]], [p[2], p[0]]];
+    segs.forEach(([v1, v2]) => {
+      const k = edgeKey(v1, v2);
+      if (!edgeMap.has(k)) {
+        edgeMap.set(k, { v1, v2, cells: [c.id] });
+      } else {
+        edgeMap.get(k).cells.push(c.id);
+      }
+    });
+  });
+
+  edgeMap.forEach(e => {
+    if (e.cells.length === 2) {
+      const u = e.cells[0], v = e.cells[1];
+      cells[u].neighbors.push(v);
+      cells[v].neighbors.push(u);
+      edges.push({ u, v, v1: e.v1, v2: e.v2, isBoundary: false, id: edges.length });
+    } else {
+      edges.push({ v1: e.v1, v2: e.v2, isBoundary: true, id: edges.length });
+    }
+  });
+}
+
+function carveMaze() {
+  const internalEdges = edges.filter(e => !e.isBoundary);
+  wallFlags = new Array(edges.length).fill(true);
+
+  const parent = Array.from({ length: cells.length }, (_, i) => i);
+  function find(i) { return parent[i] === i ? i : (parent[i] = find(parent[i])); }
+  function union(i, j) {
+    const rA = find(i), rB = find(j);
+    if (rA !== rB) { parent[rA] = rB; return true; }
+    return false;
+  }
+
+  const shuffled = [...internalEdges];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(prng() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  for (let edge of shuffled) {
+    if (union(edge.u, edge.v)) {
+      wallFlags[edge.id] = false;
+    }
+  }
+}
+
+function prepareGame(seed = null) {
+  currentSeed = (seed === null) ? Math.floor(Math.random() * 10000000) : seed;
+  prng = mulberry32(currentSeed);
+
+  buildHexagonalTriGrid();
+  carveMaze();
+
+  let minX = Infinity, maxX = -Infinity;
+  cells.forEach(c => {
+    const cx = (c.pts[0].x + c.pts[1].x + c.pts[2].x) / 3;
+    minX = Math.min(minX, cx);
+    maxX = Math.max(maxX, cx);
+  });
+
+  currentCellIndex = cells.findIndex(c => Math.abs((c.pts[0].x + c.pts[1].x + c.pts[2].x) / 3 - minX) < 1);
+  endCellIndex = cells.findIndex(c => Math.abs((c.pts[0].x + c.pts[1].x + c.pts[2].x) / 3 - maxX) < 1);
+
+  if (currentCellIndex === -1) currentCellIndex = 0;
+  if (endCellIndex === -1) endCellIndex = cells.length - 1;
+
+  visitedPath = [currentCellIndex];
+
+  let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
+  cells.forEach(c => c.pts.forEach(p => {
+    bMinX = Math.min(bMinX, p.x); bMaxX = Math.max(bMaxX, p.x);
+    bMinY = Math.min(bMinY, p.y); bMaxY = Math.max(bMaxY, p.y);
+  }));
+
+  const pad = 25;
+  canvas.width = Math.ceil(bMaxX - bMinX + pad * 2);
+  canvas.height = Math.ceil(bMaxY - bMinY + pad * 2);
+
+  const offX = pad - bMinX;
+  const offY = pad - bMinY;
+
+  vertexMap.forEach(v => {
+    v.x += offX;
+    v.y += offY;
+  });
+
+  stopTimer();
+  elapsedTime = 0;
+  gameStarted = false;
+  gameActive = false;
+
+  document.getElementById('btn-start-game').disabled = false;
+  document.getElementById('timer-display').textContent = "00:00";
+  document.getElementById('message').textContent = "Click 'Start Game' to reveal walls and start timer.";
+
+  draw();
+}
+
+function startGame() {
+  if (gameStarted) return;
+  gameStarted = true;
+  gameActive = true;
+  document.getElementById('btn-start-game').disabled = true;
+  document.getElementById('message').textContent = "";
+  startTimer();
+  draw();
+}
+
+function startTimer() {
+  if (!timerInterval) {
+    startTime = Date.now() - elapsedTime;
+    timerInterval = setInterval(() => {
+      elapsedTime = Date.now() - startTime;
+      const totalSecs = Math.floor(elapsedTime / 1000);
+      const mins = String(Math.floor(totalSecs / 60)).padStart(2, '0');
+      const secs = String(totalSecs % 60).padStart(2, '0');
+      document.getElementById('timer-display').textContent = `${mins}:${secs}`;
+    }, 200);
+  }
+}
+
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const isDark = document.body.classList.contains('dark-mode');
+  const wallColor = isDark ? '#ffffff' : '#000000';
+  const pathColor = '#3399ff';
+  const endColor = '#ff3333'; // Vibrant Red Finish Triangle
+
+  // 1. Visited path (Start & current path)
+  visitedPath.forEach(id => {
+    const c = cells[id];
+    ctx.fillStyle = pathColor;
+    ctx.beginPath();
+    ctx.moveTo(c.pts[0].x, c.pts[0].y);
+    ctx.lineTo(c.pts[1].x, c.pts[1].y);
+    ctx.lineTo(c.pts[2].x, c.pts[2].y);
+    ctx.closePath();
+    ctx.fill();
+  });
+
+  // 2. Goal triangle
+  const endC = cells[endCellIndex];
+  ctx.fillStyle = endColor;
+  ctx.beginPath();
+  ctx.moveTo(endC.pts[0].x, endC.pts[0].y);
+  ctx.lineTo(endC.pts[1].x, endC.pts[1].y);
+  ctx.lineTo(endC.pts[2].x, endC.pts[2].y);
+  ctx.closePath();
+  ctx.fill();
+
+  // 3. Walls
+  ctx.strokeStyle = wallColor;
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+
+  edges.forEach(e => {
+    if (e.isBoundary || (gameStarted && wallFlags[e.id])) {
+      ctx.beginPath();
+      ctx.moveTo(e.v1.x, e.v1.y);
+      ctx.lineTo(e.v2.x, e.v2.y);
+      ctx.stroke();
+    }
+  });
+}
+
+function pointInTriangle(px, py, pts) {
+  const [p0, p1, p2] = pts;
+  const A = 0.5 * (-p1.y * p2.x + p0.y * (-p1.x + p2.x) + p0.x * (p1.y - p2.y) + p1.x * p2.y);
+  const sign = A < 0 ? -1 : 1;
+  const s = (p0.y * p2.x - p0.x * p2.y + (p2.y - p0.y) * px + (p0.x - p2.x) * py) * sign;
+  const t = (p0.x * p1.y - p0.y * p1.x + (p0.y - p1.y) * px + (p1.x - p0.x) * py) * sign;
+  return s > 0 && t > 0 && (s + t) < 2 * A * sign;
+}
+
+canvas.addEventListener('click', (e) => {
+  if (!gameActive || !gameStarted) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const clickX = (e.clientX - rect.left) * scaleX;
+  const clickY = (e.clientY - rect.top) * scaleY;
+
+  let targetId = -1;
+  for (let i = 0; i < cells.length; i++) {
+    if (pointInTriangle(clickX, clickY, cells[i].pts)) {
+      targetId = i;
+      break;
+    }
+  }
+
+  if (targetId === -1 || targetId === currentCellIndex) return;
+
+  const pathIdx = visitedPath.indexOf(targetId);
+  if (pathIdx !== -1) {
+    currentCellIndex = targetId;
+    visitedPath = visitedPath.slice(0, pathIdx + 1);
+    draw();
+    return;
+  }
+
+  if (!cells[currentCellIndex].neighbors.includes(targetId)) return;
+
+  const edge = edges.find(e => !e.isBoundary && ((e.u === currentCellIndex && e.v === targetId) || (e.u === targetId && e.v === currentCellIndex)));
+  if (edge && wallFlags[edge.id]) return;
+
+  currentCellIndex = targetId;
+  visitedPath.push(currentCellIndex);
+  draw();
+
+  if (currentCellIndex === endCellIndex) {
+    gameActive = false;
+    stopTimer();
+    const finalSecs = (elapsedTime / 1000).toFixed(2);
+    document.getElementById('message').textContent = `Maze Completed! Total Time: ${finalSecs} seconds`;
+  }
+});
+
+document.getElementById('btn-start-game').addEventListener('click', startGame);
+document.getElementById('btn-new').addEventListener('click', () => prepareGame());
+document.getElementById('btn-restart').addEventListener('click', () => prepareGame(currentSeed));
+document.getElementById('btn-how-to').addEventListener('click', () => document.getElementById('modal-overlay').classList.remove('hidden'));
+document.getElementById('btn-close-modal').addEventListener('click', () => document.getElementById('modal-overlay').classList.add('hidden'));
+
+document.getElementById('theme-select').addEventListener('change', (e) => {
+  document.body.classList.toggle('dark-mode', e.target.value === 'dark');
+  draw();
+});
+
+document.getElementById('timer-toggle').addEventListener('change', (e) => {
+  document.getElementById('timer-display').classList.toggle('hidden', !e.target.checked);
+});
+
+prepareGame();
+</script>
+</body>
+</html>
