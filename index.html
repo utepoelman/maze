@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hexagonal Triangular Maze</title>
+<title>Hexagonal Maze</title>
 <style>
   :root {
     --bg-color: #ffffff;
@@ -44,7 +44,7 @@
     justify-content: center;
     margin-bottom: 10px;
   }
-  button, select, label {
+  button, select, label, input[type="text"] {
     background-color: var(--button-bg);
     color: var(--text-color);
     border: 1px solid var(--button-border);
@@ -52,6 +52,17 @@
     font-family: inherit;
     font-size: 14px;
     cursor: pointer;
+    box-sizing: border-box;
+  }
+  input[type="text"] {
+    cursor: text;
+    width: 110px;
+    text-align: center;
+  }
+  .seed-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
   #btn-start-game {
     font-weight: bold;
@@ -117,6 +128,12 @@
   <button id="btn-how-to">How to Play</button>
   <button id="btn-new">New Maze</button>
   <button id="btn-restart">Replay Maze</button>
+  <div class="seed-group">
+    <input type="text" id="seed-input" placeholder="Seed" title="Enter a custom numerical seed">
+    <button id="btn-apply-seed">Apply Seed</button>
+  </div>
+  <button id="btn-copy-with-headers">Copy with Headers</button>
+  <button id="btn-copy-data-only">Copy Data Only</button>
   <select id="size-select">
     <option value="6">Size: Standard</option>
     <option value="9">Size: Large (+3 Rows)</option>
@@ -146,6 +163,7 @@
       <li><strong>Upright Triangles (▲):</strong> Left, Right, Up.</li>
       <li><strong>Inverted Triangles (▼):</strong> Left, Right, Down.</li>
       <li>Your valid path lights up in blue as you move.</li>
+      <li>Enter a <strong>Custom Seed</strong> in the toolbar to load or share specific maze designs.</li>
     </ul>
     <button id="btn-close-modal">Got It</button>
   </div>
@@ -166,13 +184,16 @@ let visitedPath = [];
 
 let gameStarted = false;
 let gameActive = false;
+let gameCompleted = false;
 let startTime = 0;
 let timerInterval = null;
 let elapsedTime = 0;
 let currentSeed = 0;
+let totalMoves = 0;
 
 const canvas = document.getElementById('mazeCanvas');
 const ctx = canvas.getContext('2d');
+const seedInput = document.getElementById('seed-input');
 
 function mulberry32(a) {
   return function() {
@@ -295,7 +316,13 @@ function carveMazeDFS() {
 }
 
 function prepareGame(seed = null) {
-  currentSeed = (seed === null) ? Math.floor(Math.random() * 10000000) : seed;
+  if (seed === null) {
+    currentSeed = Math.floor(Math.random() * 10000000);
+  } else {
+    currentSeed = Math.abs(parseInt(seed, 10)) || Math.floor(Math.random() * 10000000);
+  }
+
+  seedInput.value = currentSeed;
   prng = mulberry32(currentSeed);
 
   N = parseInt(document.getElementById('size-select').value, 10);
@@ -317,6 +344,7 @@ function prepareGame(seed = null) {
   if (endCellIndex === -1) endCellIndex = cells.length - 1;
 
   visitedPath = [currentCellIndex];
+  totalMoves = 0;
 
   let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
   cells.forEach(c => c.pts.forEach(p => {
@@ -340,6 +368,7 @@ function prepareGame(seed = null) {
   elapsedTime = 0;
   gameStarted = false;
   gameActive = false;
+  gameCompleted = false;
 
   document.getElementById('btn-start-game').disabled = false;
   document.getElementById('timer-display').textContent = "00:00";
@@ -352,6 +381,7 @@ function startGame() {
   if (gameStarted) return;
   gameStarted = true;
   gameActive = true;
+  gameCompleted = false;
   document.getElementById('btn-start-game').disabled = true;
   document.getElementById('message').textContent = "";
   canvas.focus();
@@ -448,6 +478,7 @@ function moveToTarget(targetId) {
   if (edge && wallFlags[edge.id]) return;
 
   // 3. Process movement or path backtracking after wall verification
+  totalMoves++;
   const pathIdx = visitedPath.indexOf(targetId);
   if (pathIdx !== -1) {
     currentCellIndex = targetId;
@@ -461,6 +492,7 @@ function moveToTarget(targetId) {
 
   if (currentCellIndex === endCellIndex) {
     gameActive = false;
+    gameCompleted = true;
     stopTimer();
     const finalSecs = (elapsedTime / 1000).toFixed(2);
     document.getElementById('message').textContent = `Maze Completed! Total Time: ${finalSecs} seconds`;
@@ -498,6 +530,8 @@ canvas.addEventListener('click', (e) => {
 
 // Structural Shared-Edge Keyboard Navigation + Spacebar
 window.addEventListener('keydown', (e) => {
+  if (document.activeElement === seedInput) return;
+
   if (e.code === 'Space') {
     e.preventDefault();
     if (!gameStarted) {
@@ -567,6 +601,82 @@ window.addEventListener('keydown', (e) => {
 
   if (bestNeighbor !== -1) {
     moveToTarget(bestNeighbor);
+  }
+});
+
+// Clipboard Functions
+function getExportMetrics() {
+  const sizeSelect = document.getElementById('size-select');
+  const sizeText = sizeSelect.options[sizeSelect.selectedIndex].text;
+  const themeSelect = document.getElementById('theme-select');
+  const themeText = themeSelect.options[themeSelect.selectedIndex].text;
+  const timerShown = document.getElementById('timer-toggle').checked ? 'Shown' : 'Hidden';
+  const finalSecs = (elapsedTime / 1000).toFixed(2);
+  const status = gameCompleted ? 'Completed' : (gameStarted ? 'In Progress' : 'Not Started');
+
+  const headers = [
+    'Size',
+    'Theme',
+    'Timer Display',
+    'Maze Seed',
+    'Status',
+    'Time Elapsed (s)',
+    'Total Moves',
+    'Path Length'
+  ];
+
+  const values = [
+    sizeText,
+    themeText,
+    timerShown,
+    currentSeed,
+    status,
+    finalSecs,
+    totalMoves,
+    visitedPath.length
+  ];
+
+  return { headers, values };
+}
+
+function copyToClipboard(text, btnElement, originalLabel) {
+  navigator.clipboard.writeText(text).then(() => {
+    btnElement.textContent = 'Copied!';
+    setTimeout(() => {
+      btnElement.textContent = originalLabel;
+    }, 1500);
+  }).catch(() => {
+    alert('Failed to copy data to clipboard.');
+  });
+}
+
+document.getElementById('btn-copy-with-headers').addEventListener('click', (e) => {
+  const { headers, values } = getExportMetrics();
+  const textToCopy = `${headers.join('\t')}\n${values.join('\t')}`;
+  copyToClipboard(textToCopy, e.target, 'Copy with Headers');
+});
+
+document.getElementById('btn-copy-data-only').addEventListener('click', (e) => {
+  const { values } = getExportMetrics();
+  const textToCopy = values.join('\t');
+  copyToClipboard(textToCopy, e.target, 'Copy Data Only');
+});
+
+// Seed Control Logic
+document.getElementById('btn-apply-seed').addEventListener('click', () => {
+  const customSeed = seedInput.value.trim();
+  if (customSeed !== "") {
+    prepareGame(customSeed);
+  }
+});
+
+seedInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const customSeed = seedInput.value.trim();
+    if (customSeed !== "") {
+      prepareGame(customSeed);
+    }
   }
 });
 
