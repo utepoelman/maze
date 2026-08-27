@@ -94,6 +94,7 @@
     display: block;
     cursor: pointer;
     outline: none;
+    touch-action: none;
   }
   #message {
     font-size: 18px;
@@ -159,9 +160,8 @@
     <p>Find a path from the blue start triangle to the red goal triangle.</p>
     <ul>
       <li>Press <strong>Spacebar</strong> or click <strong>Start Game</strong> to begin.</li>
-      <li>Click on an <strong>adjacent triangle</strong> or use <strong>Arrow Keys</strong> to move.</li>
-      <li><strong>Upright Triangles (▲):</strong> Left, Right, Up.</li>
-      <li><strong>Inverted Triangles (▼):</strong> Left, Right, Down.</li>
+      <li><strong>Click/Touch and Drag</strong> across the maze to continuously draw your path.</li>
+      <li>Use <strong>Arrow Keys</strong> for step-by-step keyboard movement.</li>
       <li>Your valid path lights up in blue as you move.</li>
       <li>Enter a <strong>Custom Seed</strong> in the toolbar to load or share specific maze designs.</li>
     </ul>
@@ -190,6 +190,8 @@ let timerInterval = null;
 let elapsedTime = 0;
 let currentSeed = 0;
 let totalMoves = 0;
+
+let isPointerDown = false;
 
 const canvas = document.getElementById('mazeCanvas');
 const ctx = canvas.getContext('2d');
@@ -493,6 +495,7 @@ function moveToTarget(targetId) {
   if (currentCellIndex === endCellIndex) {
     gameActive = false;
     gameCompleted = true;
+    isPointerDown = false;
     stopTimer();
     const finalSecs = (elapsedTime / 1000).toFixed(2);
     document.getElementById('message').textContent = `Maze Completed! Total Time: ${finalSecs} seconds`;
@@ -508,24 +511,45 @@ function pointInTriangle(px, py, pts) {
   return s > 0 && t > 0 && (s + t) < 2 * A * sign;
 }
 
-canvas.addEventListener('click', (e) => {
+// Continuous Tracing Event Listeners
+function handlePointerInteraction(e) {
   if (!gameActive || !gameStarted) return;
 
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
-  const clickX = (e.clientX - rect.left) * scaleX;
-  const clickY = (e.clientY - rect.top) * scaleY;
+  const pointX = (e.clientX - rect.left) * scaleX;
+  const pointY = (e.clientY - rect.top) * scaleY;
 
   let targetId = -1;
   for (let i = 0; i < cells.length; i++) {
-    if (pointInTriangle(clickX, clickY, cells[i].pts)) {
+    if (pointInTriangle(pointX, pointY, cells[i].pts)) {
       targetId = i;
       break;
     }
   }
 
   moveToTarget(targetId);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  isPointerDown = true;
+  canvas.setPointerCapture(e.pointerId);
+  handlePointerInteraction(e);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!isPointerDown) return;
+  handlePointerInteraction(e);
+});
+
+canvas.addEventListener('pointerup', (e) => {
+  isPointerDown = false;
+  canvas.releasePointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointercancel', (e) => {
+  isPointerDown = false;
 });
 
 // Structural Shared-Edge Keyboard Navigation + Spacebar
